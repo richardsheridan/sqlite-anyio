@@ -9,8 +9,16 @@ from logging import Logger, getLogger
 from types import TracebackType
 from typing import Any
 
+from anyio.lowlevel import checkpoint_if_cancelled
 from anyio import CancelScope, CapacityLimiter, to_thread, from_thread
 
+class InterruptionTransmogrifier:
+    async def __aenter__(self) -> InterruptionTransmogrifier:
+        return self
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        if isinstance(exc_val, sqlite3.OperationalError):
+            if str(exc_val) == "interrupted":
+                await checkpoint_if_cancelled()
 
 class Connection:
     def __init__(
@@ -47,9 +55,9 @@ class Connection:
         return exception_handled
 
     async def execute(self, sql: str, parameters: Sequence[Any] = (), /) -> Cursor:
-        real_cursor = await to_thread.run_sync(self._real_connection.execute, sql, parameters, limiter=self._limiter,
-                                               abandon_on_cancel=True)
-        return Cursor(real_cursor, self._limiter)
+        async with InterruptionTransmogrifier():
+            real_cursor = await to_thread.run_sync(self._real_connection.execute, sql, parameters, limiter=self._limiter)
+            return Cursor(real_cursor, self._limiter)
 
     update_wrapper(execute, sqlite3.Connection.execute)
 
@@ -60,8 +68,8 @@ class Connection:
     update_wrapper(close, sqlite3.Connection.close)
 
     async def commit(self):
-        return await to_thread.run_sync(self._real_connection.commit, limiter=self._limiter,
-                                        abandon_on_cancel=True)
+        async with InterruptionTransmogrifier():
+            return await to_thread.run_sync(self._real_connection.commit, limiter=self._limiter)
 
     update_wrapper(commit, sqlite3.Connection.commit)
 
@@ -100,41 +108,41 @@ class Cursor:
     update_wrapper(close, sqlite3.Cursor.close)
 
     async def execute(self, sql: str, parameters: Sequence[Any] = (), /) -> Cursor:
-        real_cursor = await to_thread.run_sync(self._real_cursor.execute, sql, parameters, limiter=self._limiter,
-                                               abandon_on_cancel=True)
-        return Cursor(real_cursor, self._limiter)
+        async with InterruptionTransmogrifier():
+            real_cursor = await to_thread.run_sync(self._real_cursor.execute, sql, parameters, limiter=self._limiter)
+            return Cursor(real_cursor, self._limiter)
 
     update_wrapper(execute, sqlite3.Cursor.execute)
 
     async def executemany(self, sql: str, parameters: Sequence[Any], /) -> Cursor:
-        real_cursor = await to_thread.run_sync(self._real_cursor.executemany, sql, parameters, limiter=self._limiter,
-                                               abandon_on_cancel=True)
-        return Cursor(real_cursor, self._limiter)
+        async with InterruptionTransmogrifier():
+            real_cursor = await to_thread.run_sync(self._real_cursor.executemany, sql, parameters, limiter=self._limiter)
+            return Cursor(real_cursor, self._limiter)
 
     update_wrapper(executemany, sqlite3.Cursor.executemany)
 
     async def executescript(self, sql_script: str, /) -> Cursor:
-        real_cursor = await to_thread.run_sync(self._real_cursor.executescript, sql_script, limiter=self._limiter,
-                                               abandon_on_cancel=True)
-        return Cursor(real_cursor, self._limiter)
+        async with InterruptionTransmogrifier():
+            real_cursor = await to_thread.run_sync(self._real_cursor.executescript, sql_script, limiter=self._limiter)
+            return Cursor(real_cursor, self._limiter)
 
     update_wrapper(executescript, sqlite3.Cursor.executescript)
 
     async def fetchone(self) -> tuple[Any, ...] | None:
-        return await to_thread.run_sync(self._real_cursor.fetchone, limiter=self._limiter,
-                                        abandon_on_cancel=True)
+        async with InterruptionTransmogrifier():
+            return await to_thread.run_sync(self._real_cursor.fetchone, limiter=self._limiter)
 
     update_wrapper(fetchone, sqlite3.Cursor.fetchone)
 
     async def fetchmany(self, size: int) -> list[tuple[Any, ...]]:
-        return await to_thread.run_sync(self._real_cursor.fetchmany, size, limiter=self._limiter,
-                                        abandon_on_cancel=True)
+        async with InterruptionTransmogrifier():
+            return await to_thread.run_sync(self._real_cursor.fetchmany, size, limiter=self._limiter)
 
     update_wrapper(fetchmany, sqlite3.Cursor.fetchmany)
 
     async def fetchall(self) -> list[tuple[Any, ...]]:
-        return await to_thread.run_sync(self._real_cursor.fetchall, limiter=self._limiter,
-                                        abandon_on_cancel=True)
+        async with InterruptionTransmogrifier():
+            return await to_thread.run_sync(self._real_cursor.fetchall, limiter=self._limiter)
 
     update_wrapper(fetchall, sqlite3.Cursor.fetchall)
 
