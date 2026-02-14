@@ -12,13 +12,18 @@ from typing import Any
 from anyio.lowlevel import checkpoint_if_cancelled
 from anyio import CancelScope, CapacityLimiter, to_thread, from_thread
 
+DEFAULT_CANCEL_CHECK_N = 1000
+
+
 class InterruptionTransmogrifier:
     async def __aenter__(self) -> InterruptionTransmogrifier:
         return self
+
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         if isinstance(exc_val, sqlite3.OperationalError):
             if str(exc_val) == "interrupted":
                 await checkpoint_if_cancelled()
+
 
 class Connection:
     def __init__(
@@ -82,6 +87,19 @@ class Connection:
     async def cursor(self, factory: Callable[[sqlite3.Connection], sqlite3.Cursor] = sqlite3.Cursor) -> Cursor:
         real_cursor = await to_thread.run_sync(self._real_connection.cursor, factory, limiter=self._limiter)
         return Cursor(real_cursor, self._limiter)
+
+    update_wrapper(cursor, sqlite3.Connection.cursor)
+
+    async def set_progress_handler(self, progress_handler: Callable[[], int] | None, n: int) -> None:
+        def _progress_handler() -> int:
+            from_thread.check_cancelled()
+            if progress_handler is None:
+                return 0
+            return progress_handler()
+        update_wrapper(_progress_handler, progress_handler)
+        return await to_thread.run_sync(self._real_connection.set_progress_handler, _progress_handler, n, limiter=self._limiter)
+
+    update_wrapper(set_progress_handler, sqlite3.Connection.set_progress_handler)
 
 
 class Cursor:
@@ -154,8 +172,9 @@ async def connect(
     log: Logger | None = None,
 ) -> Connection:
     real_connection = await to_thread.run_sync(partial(sqlite3.connect, database, uri=uri, check_same_thread=False))
-    real_connection.set_progress_handler(from_thread.check_cancelled, 1)
-    return Connection(real_connection, exception_handler, log)
+    connection = Connection(real_connection, exception_handler, log)
+    await connection.set_progress_handler(bool, DEFAULT_CANCEL_CHECK_N)
+    return connection
 
 
 def exception_logger(
